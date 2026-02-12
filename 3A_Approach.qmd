@@ -1,5 +1,5 @@
 ---
-title: "Assignment 3A: Global Baseline Estimate Recommender"
+title: "Assignment 3A: Global Baseline Estimate"
 author: "Muhammad Suffyan Khan"
 format: html
 editor: visual
@@ -46,3 +46,4 @@ For a selected user, predicted ratings will be generated for movies the user has
 ## Anticipated Challenges
 
 Possible challenges include small sample size, sparse ratings, and ensuring reproducibility when loading data from the database into R.
+
