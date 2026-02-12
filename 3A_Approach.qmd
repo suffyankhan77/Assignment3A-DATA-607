@@ -1,0 +1,48 @@
+---
+title: "Assignment 3A: Global Baseline Estimate Recommender"
+author: "Muhammad Suffyan Khan"
+format: html
+editor: visual
+date: "2026-02-12"
+execute:
+  echo: true
+---
+
+## Objective
+
+The goal of this assignment is to implement a non-personalized movie recommendation system using the Global Baseline Estimate algorithm in R. The recommender will use the movie ratings dataset collected in the previous assignment and stored in PostgreSQL.
+
+## Dataset
+
+The dataset consists of three relational tables:
+
+-   users(user_id, name)
+-   movies(movie_id, title, release_year)
+-   ratings(rating_id, user_id, movie_id, rating)
+
+The ratings were collected through a small survey in which participants rated movies on a 1–5 scale. Missing ratings occur when users have not seen a movie. To ensure reproducibility, the GitHub repo will include SQL scripts to create and populate the PostgreSQL tables.
+
+## Algorithm Plan
+
+I will follow the implementation steps provided in the attached spreadsheet to compute μ, user bias, and item bias (with any regularization shown).\
+The recommendation system will use the Global Baseline Estimate model. The workflow will include:
+
+1.  Loading ratings data from PostgreSQL into R
+
+2.  Computing the global average rating (μ)
+
+3.  Computing user bias (difference between a user's average rating and μ)
+
+4.  Computing movie bias (difference between a movie's average rating and μ)
+
+5.  Predicting ratings using:
+
+    predicted_rating = μ + user_bias + movie_bias
+
+## Recommendation Strategy
+
+For a selected user, predicted ratings will be generated for movies the user has not rated. The system will recommend the movies with the highest predicted ratings.
+
+## Anticipated Challenges
+
+Possible challenges include small sample size, sparse ratings, and ensuring reproducibility when loading data from the database into R.
