@@ -1,0 +1,320 @@
+---
+# title: "Assignment 3A: Global Baseline Estimate"
+author: "Muhammad Suffyan Khan"
+format: html
+editor: visual
+date: "2026-02-15"
+execute:
+  echo: true
+---
+
+```{r}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+## Objective
+
+The goal of this assignment is to implement a non-personalized movie recommendation system using the Global Baseline Estimate algorithm in R. The recommender will use the movie ratings dataset collected in the previous assignment and stored in PostgreSQL.
+
+## Dataset
+
+The dataset consists of three relational tables:
+
+-   users(user_id, name)
+-   movies(movie_id, title, release_year)
+-   ratings(rating_id, user_id, movie_id, rating)
+
+The ratings were collected through a small survey in which participants rated movies on a 1–5 scale. Missing ratings occur when users have not seen a movie. To ensure reproducibility, the GitHub repo will include SQL scripts to create and populate the PostgreSQL tables.
+
+## Algorithm Plan
+
+I will follow the implementation steps provided in the attached spreadsheet to compute μ, user bias, and item bias (with any regularization shown).\
+The recommendation system will use the Global Baseline Estimate model. The workflow will include:
+
+1.  Loading ratings data from PostgreSQL into R
+
+2.  Computing the global average rating (μ)
+
+3.  Computing user bias (difference between a user's average rating and μ)
+
+4.  Computing movie bias (difference between a movie's average rating and μ)
+
+5.  Predicting ratings using:
+
+    predicted_rating = μ + user_bias + movie_bias
+
+## Recommendation Strategy
+
+For a selected user, predicted ratings will be generated for movies the user has not rated. The system will recommend the movies with the highest predicted ratings.
+
+## Anticipated Challenges
+
+Possible challenges include small sample size, sparse ratings, and ensuring reproducibility when loading data from the database into R.
+
+## Loading Libraries
+
+```{r}
+library(DBI)
+library(RPostgres)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+```
+
+## Connect to PosgreSQL
+
+```{r}
+con <- dbConnect(
+  RPostgres::Postgres(),
+  host = "localhost",
+  port = 5432,
+  dbname = "Movie _Ratings",
+  user = "postgres",
+  password = Sys.getenv("PGPASSWORD")
+)
+
+dbListTables(con) 
+
+```
+
+## Load table in R
+
+```{r}
+users_df  <- dbGetQuery(con, "SELECT * FROM users;")
+movies_df <- dbGetQuery(con, "SELECT * FROM movies;")
+ratings_df <- dbGetQuery(con, "SELECT * FROM ratings;")
+
+```
+
+## Basic sanity checks
+
+```{r}
+glimpse(users_df)
+glimpse(movies_df)
+glimpse(ratings_df)
+```
+
+## Prepare a clean ratings dataset
+
+```{r}
+ratings_clean <- ratings_df %>%
+  select(user_id, movie_id, rating) %>%
+  mutate(rating = as.numeric(rating)) %>%
+  filter(!is.na(rating))
+```
+
+## Join in names/titles for readability
+
+```{r}
+ratings_joined <- ratings_clean %>%
+  left_join(users_df,  by = "user_id") %>%
+  left_join(movies_df, by = "movie_id") %>%
+  select(user_id, name, movie_id, title, release_year, rating) %>%
+  arrange(name, title)
+
+head(ratings_joined, 10)
+```
+
+This step combines the ratings data with the users and movies tables to create a more interpretable dataset. By joining these tables, we can view ratings alongside user names and movie titles instead of numeric IDs. This makes later verification and interpretation of predicted ratings easier.
+
+## Global Baseline Estimate pieces
+
+# r_hat(u,i) = μ + b_u + b_i
+
+## Global mean (μ)
+
+```{r}
+mu <- mean(ratings_clean$rating)
+mu
+```
+
+Here, the global average rating (μ) is computed across all observed ratings in the dataset. This value represents the overall baseline rating level and serves as the starting point for the Global Baseline Estimate prediction model.
+
+## Regularization
+
+**Stable baseline for small datasets, keep lambda \> 0 (e.g., 5 or 10)** **Simplest baseline, set lambda \<- 0**
+
+```{r}
+lambda <- 5
+```
+
+A regularization parameter (lambda) is introduced to stabilize bias estimates when users or movies have only a small number of ratings. This prevents extreme bias values caused by limited observations and produces more reliable predictions in small datasets.
+
+## User bias (b_u): regularized deviation from global mean
+
+```{r}
+user_bias <- ratings_clean %>%
+  group_by(user_id) %>%
+  summarise(
+    n_user = n(),
+    user_mean = mean(rating),
+    b_u = (sum(rating - mu)) / (n_user + lambda),
+    .groups = "drop"
+  )
+```
+
+In this step, user-specific bias values are calculated to capture how individual users tend to rate movies relative to the global average. Some users consistently give higher ratings, while others rate more strictly. The regularized formula adjusts these deviations to avoid overfitting.
+
+## Movie bias (b_i): regularized deviation from global mean
+
+```{r}
+movie_bias <- ratings_clean %>%
+  group_by(movie_id) %>%
+  summarise(
+    n_movie = n(),
+    movie_mean = mean(rating),
+    b_i = (sum(rating - mu)) / (n_movie + lambda),
+    .groups = "drop"
+  )
+
+head(user_bias)
+head(movie_bias)
+```
+
+Here, movie-specific bias values are computed to reflect how certain movies tend to be rated relative to the global mean. Popular or well-received movies may have positive bias values, while lower-rated movies may have negative bias values.
+
+## Predicted ratings for observed pairs (for sanity checking)
+
+```{r}
+predicted_observed <- ratings_clean %>%
+  left_join(user_bias,  by = "user_id") %>%
+  left_join(movie_bias, by = "movie_id") %>%
+  mutate(
+    predicted_rating = mu + b_u + b_i,
+    error = rating - predicted_rating
+  ) %>%
+  left_join(users_df,  by = "user_id") %>%
+  left_join(movies_df, by = "movie_id") %>%
+  select(name, title, rating, predicted_rating, error) %>%
+  arrange(desc(abs(error)))
+
+head(predicted_observed, 15)
+```
+
+This section combines the global mean, user bias, and movie bias to generate predicted ratings using the Global Baseline Estimate formula. Comparing predicted ratings with actual ratings helps verify that the model is working as expected and allows us to inspect prediction errors.
+
+## Quick metric: RMSE on observed ratings
+
+```{r}
+rmse <- sqrt(mean((predicted_observed$error)^2, na.rm = TRUE))
+rmse
+```
+
+The Root Mean Squared Error (RMSE) is calculated to summarize the overall prediction accuracy of the baseline model. RMSE provides a single measure of how far predicted ratings are from actual ratings on average, helping evaluate model performance.
+
+## Make recommendations all users (Top-N unseen movies)
+
+```{r}
+top_n <- 5
+```
+
+This section generates movie recommendations for **every user** in the dataset. For each user, we predict ratings for movies they have **not yet rated** using the Global Baseline Estimate model, then return the **top-N** highest predicted movies per user.
+
+## Create all user–movie combinations and attach existing ratings
+
+```{r}
+all_pairs <- users_df %>%
+  select(user_id, name) %>%
+  tidyr::crossing(movies_df %>% select(movie_id, title, release_year)) %>%
+  left_join(ratings_clean, by = c("user_id", "movie_id"))
+```
+
+## Get the user's bias (if missing, assume 0) and compute predicted ratings
+
+```{r}
+all_scored <- all_pairs %>%
+  left_join(user_bias, by = "user_id") %>%
+  left_join(movie_bias, by = "movie_id") %>%
+  mutate(
+    b_u = ifelse(is.na(b_u), 0, b_u),
+    b_i = ifelse(is.na(b_i), 0, b_i),
+    predicted_rating = mu + b_u + b_i
+  )
+```
+
+```{r}
+recommendations_all <- all_scored %>%
+  filter(is.na(rating)) %>%   # unseen movies only
+  group_by(user_id, name) %>%
+  arrange(desc(predicted_rating), .by_group = TRUE) %>%
+  slice_head(n = top_n) %>%
+  ungroup() %>%
+  select(name, title, release_year, predicted_rating)
+```
+
+## Recommendations for all users
+
+```{r}
+recommendations_all
+```
+
+The table above shows the top recommended movies for each user based on the Global Baseline Estimate model. For every user, predicted ratings were computed for movies that the user has not yet rated.
+
+The recommendations are then ranked by predicted rating, and the top-N movies are selected for each user.
+
+These results demonstrate how a non-personalized baseline recommender can still generate meaningful suggestions by combining the global rating average with user-specific and movie-specific rating tendencies. Even with a small dataset, the model produces reasonable recommendations that reflect both overall movie popularity and individual user rating behavior.
+
+##Extension for some visualization for better analysis \## \[1\] Movie bias visualization
+
+```{r}
+movie_bias %>%
+  left_join(movies_df, by = "movie_id") %>%
+  ggplot(aes(x = reorder(title, b_i), y = b_i)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Movie Bias (b_i) from Global Baseline Estimate",
+    x = "Movie",
+    y = "Movie Bias"
+  )
+```
+
+This plot shows movie-specific bias values from the Global Baseline Estimate model. Movies with positive bias tend to receive ratings above the global average, while movies with negative bias tend to be rated below the global average. This visualization helps interpret how the recommender model adjusts predictions based on movie popularity.
+
+## \[2\] User bias visualization
+
+```{r}
+user_bias %>%
+  left_join(users_df, by = "user_id") %>%
+  ggplot(aes(x = reorder(name, b_u), y = b_u)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "User Bias (b_u)",
+    x = "User",
+    y = "User Bias"
+  )
+```
+
+This visualization shows the user bias values estimated by the Global Baseline model. User bias represents how each user’s rating behavior differs from the global average rating. Positive values indicate users who tend to give higher ratings overall, while negative values indicate users who rate more conservatively. This helps interpret how the recommender system adjusts predictions to account for individual rating tendencies.
+
+## \[3\] Actual vs predicted ratings
+
+```{r}
+ggplot(predicted_observed, aes(x = rating, y = predicted_rating)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(
+    title = "Actual vs Predicted Ratings",
+    x = "Actual Rating",
+    y = "Predicted Rating"
+  )
+
+```
+
+This scatter plot compares actual ratings with predicted ratings from the Global Baseline Estimate model. Points close to the diagonal reference line indicate predictions that closely match observed ratings, while points farther away represent larger prediction errors. This visualization provides an intuitive way to evaluate model performance and complements the RMSE metric by showing how well the baseline model approximates the observed rating patterns.
+
+## Disconnecting Database
+
+```{r}
+dbDisconnect(con)
+```
+
+## Conclusion
+
+In this assignment, I implemented a movie recommendation system using the Global Baseline Estimate algorithm in R. The model combines the global average rating (μ), user bias (b_u), and movie bias (b_i) to generate predicted ratings for user–movie pairs. Using this approach, I produced recommendations for movies that users had not yet rated by selecting the highest predicted ratings for each user.
+
+Although this is a non-personalized recommender system, the results demonstrate how global patterns and rating tendencies can still be used to generate meaningful recommendations. The bias visualizations help interpret how user behavior and movie popularity influence predicted ratings, while the RMSE and actual-vs-predicted plot provide a simple evaluation of model performance.
+
+Overall, this assignment demonstrates how recommender systems can be built from relational data using statistical baseline models. More advanced recommendation methods, such as collaborative filtering or matrix factorization, could build on this baseline to improve prediction accuracy and personalization.
